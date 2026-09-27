@@ -1,23 +1,23 @@
 pipeline {
     agent any
 
-    // Déclenché par le webhook GitHub à chaque push
     triggers {
         githubPush()
     }
 
+    environment {
+        IMAGE_REPO = 'gestion-projets-backend'
+        IMAGE_TAG  = "${env.BUILD_NUMBER}"
+    }
+
     stages {
         stage('Récupération du code') {
-            steps {
-                checkout scm
-            }
+            steps { checkout scm }
         }
 
         stage('Tests unitaires') {
             steps {
-                dir('backend') {
-                    sh 'mvn clean test'
-                }
+                dir('backend') { sh 'mvn clean test' }
             }
             post {
                 always {
@@ -28,9 +28,7 @@ pipeline {
 
         stage('Création du livrable') {
             steps {
-                dir('backend') {
-                    sh 'mvn package -DskipTests'
-                }
+                dir('backend') { sh 'mvn package -DskipTests' }
             }
             post {
                 success {
@@ -38,9 +36,38 @@ pipeline {
                 }
             }
         }
+
+        stage("Build de l'image Docker") {
+            steps {
+                withCredentials([usernamePassword(credentialsId: 'dockerhub-creds',
+                                                  usernameVariable: 'DOCKER_USER',
+                                                  passwordVariable: 'DOCKER_PASS')]) {
+                    dir('backend') {
+                        sh 'docker build -t $DOCKER_USER/$IMAGE_REPO:$IMAGE_TAG -t $DOCKER_USER/$IMAGE_REPO:latest .'
+                    }
+                }
+            }
+        }
+
+        stage('Push sur Docker Hub') {
+            steps {
+                withCredentials([usernamePassword(credentialsId: 'dockerhub-creds',
+                                                  usernameVariable: 'DOCKER_USER',
+                                                  passwordVariable: 'DOCKER_PASS')]) {
+                    sh '''
+                        echo "$DOCKER_PASS" | docker login -u "$DOCKER_USER" --password-stdin
+                        docker push $DOCKER_USER/$IMAGE_REPO:$IMAGE_TAG
+                        docker push $DOCKER_USER/$IMAGE_REPO:latest
+                    '''
+                }
+            }
+        }
     }
 
     post {
+        always {
+            sh 'docker logout || true'
+        }
         failure {
             emailext(
                 to: 'raif.guizani@esprit.tn',
